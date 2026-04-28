@@ -53,3 +53,4 @@ build/
 # OS
 Thumbs.db
 .DS_Store
+graphify-out/
