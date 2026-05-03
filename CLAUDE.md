@@ -88,3 +88,9 @@ Rules:
 - If graphify-out/wiki/index.md exists, navigate it instead of reading raw files
 - For cross-module "how does X relate to Y" questions, prefer `graphify query "<question>"`, `graphify path "<A>" "<B>"`, or `graphify explain "<concept>"` over grep — these traverse the graph's EXTRACTED + INFERRED edges instead of scanning files
 - After modifying code files in this session, run `graphify update .` to keep the graph current (AST-only, no API cost)
+
+ ## /audit
+
+  When the user types `/audit`, invoke the Skill tool with `skill: "audit"` before doing anything else.
+  This skill delegates a full codebase audit to an isolated sub-agent and writes `ARCHITECTURE_STATE.md`
+  to the repo root. It does NOT run inline — all analysis happens in a separate context window.

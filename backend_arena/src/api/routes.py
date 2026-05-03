@@ -1,7 +1,9 @@
 import asyncio
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
 
+from backend_arena.src.database.db_manager import get_db
 from backend_arena.src.engine.fight_loop import MatchManager
 from backend_arena.src.exceptions import (
     BattleNotFoundError,
@@ -20,11 +22,9 @@ from backend_arena.src.schemas.payloads import (
 
 router = APIRouter()
 
-_manager = MatchManager()
 
-
-def get_match_manager() -> MatchManager:
-    return _manager
+def get_match_manager(db: Session = Depends(get_db)) -> MatchManager:
+    return MatchManager(db)
 
 
 @router.get("/health")
@@ -59,8 +59,14 @@ async def execute_action(
     if manager.get_battle(payload.battle_id) is None:
         raise HTTPException(status_code=404, detail="Battle session expired or invalid")
 
-    if manager.get_battle_status(payload.battle_id) == "paused" and payload.action_type == "next_turn":
-        raise HTTPException(status_code=400, detail="Battle is paused — use kill_switch to resume or end")
+    if (
+        manager.get_battle_status(payload.battle_id) == "paused"
+        and payload.action_type == "next_turn"
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Battle is paused — use kill_switch to resume or end",
+        )
 
     loop = asyncio.get_running_loop()
 

@@ -19,8 +19,15 @@ Respond exactly in this format:
 }"""
 
 
-def build_system_prompt(entity: EntityConfig, vibe: str) -> str:
+def build_system_prompt(entity: EntityConfig, vibe: str, long_term_memory: str = "") -> str:
+    memory_block = ""
+    if long_term_memory.strip():
+        memory_block = (
+            f"[LONG-TERM MEMORY — DO NOT IGNORE]\n"
+            f"{long_term_memory}\n\n"
+        )
     return (
+        f"{memory_block}"
         f"CORE BELIEF: {entity.logic_core_belief}\n\n"
         f"TRIGGER / VIBE: Your trigger point is — {entity.trigger_point}. "
         f"The current battle vibe is: {vibe.upper()}. Embody this energy fully. "

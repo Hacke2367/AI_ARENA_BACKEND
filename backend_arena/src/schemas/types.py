@@ -6,3 +6,4 @@ from typing import Literal
 class ChatMessage:
     role: Literal["user", "assistant", "system"]
     content: str
+    id: int | None = None
