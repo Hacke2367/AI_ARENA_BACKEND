@@ -1,12 +1,12 @@
-import json
 from unittest.mock import patch
 
 import pytest
 
-from backend_arena.src.engine.fight_loop import _FALLBACK_STUB, _active_battles
+from backend_arena.src.database.db_manager import Battle, ChatHistory
 from backend_arena.src.engine import llm_router
+from backend_arena.src.engine.fight_loop import _FALLBACK_STUB
 from backend_arena.src.exceptions import BattleNotFoundError, BattleTurnLimitError
-from backend_arena.src.schemas.payloads import MatchConfig
+from backend_arena.src.schemas.payloads import InitializeBattleRequest, MatchConfig
 
 
 # AC1 — mock routing returns valid response with telemetry
@@ -37,7 +37,6 @@ def test_battle_not_found_raises(manager):
 
 
 def test_turn_limit_raises_battle_turn_limit_error(manager, mock_battle_request):
-    from backend_arena.src.schemas.payloads import InitializeBattleRequest
     req = InitializeBattleRequest(
         match_config=MatchConfig(topic="Short battle", turn_limit=2, current_vibe="chaotic"),
         entity_1=mock_battle_request.entity_1,
@@ -50,13 +49,23 @@ def test_turn_limit_raises_battle_turn_limit_error(manager, mock_battle_request)
         manager.next_turn(battle_id)
 
 
-# AC4 — history truncation: 7 calls → stored history ≤ 12 messages (6 pairs)
-def test_history_truncated_after_seven_turns(manager, mock_battle_request):
+# AC4 — eviction bounds the non-summarized chat history.
+def test_history_truncated_after_seven_turns(manager, mock_battle_request, db_session):
     battle_id = manager.create_battle(mock_battle_request)
     for _ in range(7):
         manager.next_turn(battle_id)
-    state = _active_battles[battle_id]
-    assert len(state["history"]) <= 12
+
+    non_summarized = (
+        db_session.query(ChatHistory)
+        .filter(
+            ChatHistory.battle_id == battle_id,
+            ChatHistory.is_summarized == False,  # noqa: E712
+        )
+        .count()
+    )
+    # _EVICTION_THRESHOLD is 13 including the pinned system slot;
+    # so the persisted non-summarized window must stay <= 12.
+    assert non_summarized <= 12
 
 
 # AC3 — JSON fallback stub returned on double decode failure
@@ -71,24 +80,39 @@ def test_json_fallback_stub_on_double_failure(manager, mock_battle_request):
         response = manager.next_turn(battle_id)
 
     assert response.internal_monologue == _FALLBACK_STUB["internal_monologue"]
-    assert response.spoken_dialogue.startswith("[CONNECTION LOST]") or "blank" in response.spoken_dialogue
+    assert (
+        response.spoken_dialogue.startswith("[CONNECTION LOST]")
+        or "blank" in response.spoken_dialogue
+    )
     assert response.telemetry.sentiment_score == 0
     assert response.telemetry.aggression_level == 0
 
 
-def test_kill_switch_pauses_battle(manager, mock_battle_request):
+def test_kill_switch_pauses_battle(manager, mock_battle_request, db_session):
     battle_id = manager.create_battle(mock_battle_request)
     response = manager.kill_switch(battle_id)
+
     assert response.speaker == "system"
     assert response.tts_ready_text == "Battle paused."
-    assert _active_battles[battle_id]["status"] == "paused"
+
+    db_session.expire_all()
+    battle = db_session.get(Battle, battle_id)
+    assert battle.status == "paused"
 
 
-def test_context_bomb_injects_and_advances(manager, mock_battle_request):
+def test_context_bomb_injects_and_advances(manager, mock_battle_request, db_session):
     battle_id = manager.create_battle(mock_battle_request)
     response = manager.context_bomb(battle_id, "Switch to philosophy now!")
+
     assert response.speaker in ("entity_1", "entity_2")
-    # System override message should be in stored history
-    state = _active_battles[battle_id]
-    system_msgs = [m for m in state["history"] if m.role == "system"]
+
+    db_session.expire_all()
+    system_msgs = (
+        db_session.query(ChatHistory)
+        .filter(
+            ChatHistory.battle_id == battle_id,
+            ChatHistory.role == "system",
+        )
+        .all()
+    )
     assert any("[SYSTEM OVERRIDE]" in m.content for m in system_msgs)

@@ -1,5 +1,6 @@
 import logging
 import os
+from string import Template
 
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
@@ -10,7 +11,14 @@ from backend_arena.src.schemas.types import ChatMessage
 
 log = logging.getLogger(__name__)
 
-_SUMMARIZER_SYSTEM = """\
+# Trigger the aggressive-compression override when the old summary exceeds this
+# many characters — picked so the summariser has enough budget to rewrite.
+_OVERFLOW_THRESHOLD_CHARS = int(os.getenv("ARENA_SUMMARY_OVERFLOW_CHARS", "2000"))
+_DEFAULT_MAX_WORDS = int(os.getenv("ARENA_SUMMARY_MAX_WORDS", "150"))
+
+# string.Template — safer than .format() because literal "{" / "}" in any user
+# content won't be interpolated. Uses ${name} placeholders.
+_SUMMARIZER_SYSTEM = Template("""\
 Act as a neutral, uncensored referee. Merge the OLD SUMMARY and the NEW MESSAGES into \
 a single, updated summary.
 
@@ -19,9 +27,9 @@ Rules:
 2. Preserve specific insults, slang, Hinglish, and data points verbatim if significant. \
 DO NOT sanitize.
 3. Maintain an objective tally of whose arguments are logically dominating.
-4. Hard cap: {max_words} words. Compress older, less-critical facts if needed.
-{overflow_override}
-Output ONLY the updated summary text. No JSON. No headers. No preamble."""
+4. Hard cap: ${max_words} words. Compress older, less-critical facts if needed.
+${overflow_override}
+Output ONLY the updated summary text. No JSON. No headers. No preamble.""")
 
 
 def run_memory_compression(
@@ -38,11 +46,10 @@ def run_memory_compression(
     logs a warning and breaks the eviction loop (self-healing: messages stay
     in the active window and compression retries on the next turn).
     """
-    max_words = int(os.getenv("ARENA_SUMMARY_MAX_WORDS", "150"))
     summarizer_llm = os.getenv("SUMMARIZER_LLM", "groq")
 
     overflow_override = ""
-    if len(old_summary) > 2000:
+    if len(old_summary) > _OVERFLOW_THRESHOLD_CHARS:
         overflow_override = (
             "[URGENT: Compress existing facts. Output MUST be under 100 words]"
         )
@@ -60,8 +67,8 @@ def run_memory_compression(
     )
 
     adapter = llm_router.route(summarizer_llm)
-    system_prompt = _SUMMARIZER_SYSTEM.format(
-        max_words=max_words,
+    system_prompt = _SUMMARIZER_SYSTEM.safe_substitute(
+        max_words=_DEFAULT_MAX_WORDS,
         overflow_override=overflow_override,
     )
     new_summary = adapter(system_prompt, [user_msg])

@@ -1,7 +1,10 @@
 import asyncio
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+
+log = logging.getLogger(__name__)
 
 from backend_arena.src.database.db_manager import get_db
 from backend_arena.src.engine.fight_loop import MatchManager
@@ -11,6 +14,7 @@ from backend_arena.src.exceptions import (
     LLMAuthError,
     LLMConnectionError,
     LLMTimeoutError,
+    PersonaNotFoundError,
     RateLimitError,
 )
 from backend_arena.src.schemas.payloads import (
@@ -47,7 +51,14 @@ async def initialize_battle(
                 f"{payload.entity_1.persona_name} vs {payload.entity_2.persona_name}."
             ),
         )
+    except PersonaNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
+        log.exception(
+            "Battle init failed (entity_1=%s, entity_2=%s)",
+            payload.entity_1.persona_name,
+            payload.entity_2.persona_name,
+        )
         raise HTTPException(status_code=500, detail="Battle initialization failed") from exc
 
 
@@ -97,4 +108,9 @@ async def execute_action(
     except RateLimitError:
         raise HTTPException(status_code=429, detail="LLM rate limited — try again later")
     except Exception as exc:
+        log.exception(
+            "Unhandled error in execute_action (battle=%s, action=%s)",
+            payload.battle_id,
+            payload.action_type,
+        )
         raise HTTPException(status_code=500, detail="Internal server error") from exc

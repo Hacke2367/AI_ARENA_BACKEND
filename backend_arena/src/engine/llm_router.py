@@ -3,6 +3,7 @@ import logging
 import os
 import random
 import time
+from functools import lru_cache
 from typing import Protocol
 
 import httpx
@@ -21,7 +22,8 @@ _BASE_DELAY = 2.0
 _MULTIPLIER = 2.0
 _MAX_WAIT = 10.0
 _MAX_RETRIES = 3
-_READ_TIMEOUT = 30.0
+_READ_TIMEOUT = float(os.getenv("LLM_READ_TIMEOUT_S", "30.0"))
+_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "2048"))
 
 
 class LLMAdapter(Protocol):
@@ -39,6 +41,14 @@ def _with_backoff(fn):
             sleep_s = random.uniform(0, cap)
             log.warning("Rate limited — retry %d/%d in %.2fs", attempt + 1, _MAX_RETRIES, sleep_s)
             time.sleep(sleep_s)
+    # Defensive: loop above always returns or raises, but guarantee it.
+    raise RuntimeError("_with_backoff exhausted without return — unreachable")
+
+
+def _require_nonempty(content: str | None, provider: str) -> str:
+    if not content or not content.strip():
+        raise LLMConnectionError(f"{provider} returned empty/null content")
+    return content
 
 
 class MockAdapter:
@@ -65,8 +75,12 @@ class OpenAIAdapter:
     def _call(self, messages: list[dict]) -> str:
         import openai
         try:
-            r = self._client.chat.completions.create(model=self._model, messages=messages)
-            return r.choices[0].message.content
+            r = self._client.chat.completions.create(
+                model=self._model,
+                messages=messages,
+                max_tokens=_MAX_TOKENS,
+            )
+            return _require_nonempty(r.choices[0].message.content, "OpenAI")
         except openai.AuthenticationError as e:
             raise LLMAuthError(str(e)) from e
         except openai.RateLimitError as e:
@@ -96,11 +110,13 @@ class ClaudeAdapter:
         try:
             r = self._client.messages.create(
                 model=self._model,
-                max_tokens=2048,
+                max_tokens=_MAX_TOKENS,
                 system=system_prompt,
                 messages=messages,
             )
-            return r.content[0].text
+            if not r.content:
+                raise LLMConnectionError("Claude returned empty content block list")
+            return _require_nonempty(r.content[0].text, "Claude")
         except anthropic.AuthenticationError as e:
             raise LLMAuthError(str(e)) from e
         except anthropic.RateLimitError as e:
@@ -125,8 +141,12 @@ class GroqAdapter:
     def _call(self, messages: list[dict]) -> str:
         import groq
         try:
-            r = self._client.chat.completions.create(model=self._model, messages=messages)
-            return r.choices[0].message.content
+            r = self._client.chat.completions.create(
+                model=self._model,
+                messages=messages,
+                max_tokens=_MAX_TOKENS,
+            )
+            return _require_nonempty(r.choices[0].message.content, "Groq")
         except groq.AuthenticationError as e:
             raise LLMAuthError(str(e)) from e
         except groq.RateLimitError as e:
@@ -159,7 +179,9 @@ class OllamaAdapter:
             if r.status_code == 429:
                 raise RateLimitError("Ollama rate limited")
             r.raise_for_status()
-            return r.json()["message"]["content"]
+            payload = r.json()
+            content = payload.get("message", {}).get("content")
+            return _require_nonempty(content, "Ollama")
         except httpx.ReadTimeout as e:
             raise LLMTimeoutError(str(e)) from e
         except httpx.ConnectError as e:
@@ -185,39 +207,39 @@ class HuggingFaceAdapter:
         try:
             r = self._client.post(
                 self._url,
-                json={"model": self._model, "messages": messages, "max_tokens": 2048},
+                json={"model": self._model, "messages": messages, "max_tokens": _MAX_TOKENS},
             )
             if r.status_code in (401, 403):
                 raise LLMAuthError(f"HuggingFace auth error: HTTP {r.status_code}")
             if r.status_code == 429:
                 raise RateLimitError("HuggingFace rate limited")
             r.raise_for_status()
-            return r.json()["choices"][0]["message"]["content"]
+            payload = r.json()
+            choices = payload.get("choices") or []
+            if not choices:
+                raise LLMConnectionError("HuggingFace returned no choices")
+            content = choices[0].get("message", {}).get("content")
+            return _require_nonempty(content, "HuggingFace")
         except httpx.ReadTimeout as e:
             raise LLMTimeoutError(str(e)) from e
         except httpx.ConnectError as e:
             raise LLMConnectionError(str(e)) from e
 
 
-_adapter_cache: dict[str, LLMAdapter] = {}
+_BUILDERS: dict[str, type] = {
+    "mock": MockAdapter,
+    "openai": OpenAIAdapter,
+    "claude": ClaudeAdapter,
+    "groq": GroqAdapter,
+    "ollama": OllamaAdapter,
+    "huggingface": HuggingFaceAdapter,
+}
 
 
+# lru_cache is thread-safe in CPython and replaces the previous unlocked dict.
+@lru_cache(maxsize=None)
 def route(selected_llm: str) -> LLMAdapter:
-    if selected_llm not in _adapter_cache:
-        if selected_llm == "mock":
-            _adapter_cache["mock"] = MockAdapter()
-        elif selected_llm == "openai":
-            _adapter_cache["openai"] = OpenAIAdapter()
-        elif selected_llm == "claude":
-            _adapter_cache["claude"] = ClaudeAdapter()
-        elif selected_llm == "groq":
-            _adapter_cache["groq"] = GroqAdapter()
-        elif selected_llm == "ollama":
-            _adapter_cache["ollama"] = OllamaAdapter()
-        elif selected_llm == "huggingface":
-            _adapter_cache["huggingface"] = HuggingFaceAdapter()
-        else:
-            raise ValueError(f"Unknown LLM: {selected_llm!r}")
-    return _adapter_cache[selected_llm]
-
-
+    builder = _BUILDERS.get(selected_llm)
+    if builder is None:
+        raise ValueError(f"Unknown LLM: {selected_llm!r}")
+    return builder()

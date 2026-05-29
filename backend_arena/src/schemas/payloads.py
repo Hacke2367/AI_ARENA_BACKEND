@@ -20,16 +20,37 @@ class Telemetry(ArenaBaseModel):
 class MatchConfig(ArenaBaseModel):
     topic: str = Field(..., min_length=3, max_length=200)
     turn_limit: int = Field(..., ge=1, le=50)
-    current_vibe: Literal["logical", "emotional", "chaotic"]
+    current_vibe: Literal[
+        "logical", "emotional", "chaotic",
+        "opening", "heated", "cornered", "victory_lap",
+    ]
+    # Shared world-premise both LLMs accept as absolute truth (static for the full battle).
+    # Optional — omitting it is fully backward-compatible.
+    battle_context: Optional[str] = Field(default=None, max_length=2000)
 
 
 class EntityConfig(ArenaBaseModel):
     selected_llm: Literal["mock", "openai", "claude", "ollama", "groq", "huggingface"]
     persona_name: str = Field(..., min_length=2, max_length=50)
-    logic_core_belief: str = Field(..., min_length=10, max_length=1000)
-    trigger_point: str = Field(..., min_length=5, max_length=1000)
+    # Optional — falls back to a neutral default if not provided
+    logic_core_belief: Optional[str] = Field(
+        default="Engage in debate using logic, reasoning, and evidence.",
+        min_length=10,
+        max_length=1000,
+    )
+    # Optional — falls back to a neutral default if not provided
+    trigger_point: Optional[str] = Field(
+        default="Respond assertively when your position is challenged.",
+        min_length=5,
+        max_length=1000,
+    )
     voice_id: str = Field(..., min_length=2, max_length=50)
     voice_speed: float = Field(..., ge=0.5, le=2.0)
+    # Layer 1 DNA fields — Optional for backward compatibility
+    persona_id: Optional[str] = None
+    backstory: Optional[str] = None
+    vocabulary: Optional[list[str]] = None
+    debate_tactics: Optional[list[str]] = None
 
 
 class InitializeBattleRequest(ArenaBaseModel):
@@ -51,7 +72,7 @@ class ExecuteActionRequest(ArenaBaseModel):
 
 
 class ExecuteActionResponse(ArenaBaseModel):
-    speaker: str = Field(..., min_length=2)
+    speaker: Literal["entity_1", "entity_2", "system"]
     internal_monologue: str = Field(..., min_length=1)
     spoken_dialogue: str = Field(..., min_length=1)
     tts_ready_text: str = Field(..., min_length=1)

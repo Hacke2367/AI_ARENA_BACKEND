@@ -1,23 +1,76 @@
-import pytest
+import os
 
-from backend_arena.src.engine.fight_loop import _active_battles
-from backend_arena.src.engine.llm_router import _adapter_cache
+# Set BEFORE backend_arena imports so the summariser worker uses mock and the
+# default file DB is never touched.
+os.environ.setdefault("SUMMARIZER_LLM", "mock")
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from backend_arena.src.database.db_manager import Base, get_db
+from backend_arena.src.engine import fight_loop, llm_router
+from backend_arena.src.main import app
 from backend_arena.src.schemas.payloads import EntityConfig, InitializeBattleRequest, MatchConfig
 
 
 @pytest.fixture(autouse=True)
-def clear_state():
-    _active_battles.clear()
-    _adapter_cache.clear()
+def _reset_router_cache():
+    llm_router.route.cache_clear()
     yield
-    _active_battles.clear()
-    _adapter_cache.clear()
+    llm_router.route.cache_clear()
 
 
 @pytest.fixture
-def manager():
-    from backend_arena.src.engine.fight_loop import MatchManager
-    return MatchManager()
+def db_session(monkeypatch):
+    """
+    Per-test isolated in-memory SQLite.
+
+    StaticPool keeps a single underlying connection so that the summariser
+    worker thread (which opens its own Session via fight_loop.SessionLocal)
+    sees the same data as the test's main-thread session.
+    """
+    test_engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(bind=test_engine)
+    TestSession = sessionmaker(bind=test_engine, autocommit=False, autoflush=False)
+
+    # Worker thread inside fight_loop opens its own session via this name —
+    # patch it to point at the test engine.
+    monkeypatch.setattr(fight_loop, "SessionLocal", TestSession)
+
+    session = TestSession()
+    try:
+        yield session
+    finally:
+        session.close()
+        test_engine.dispose()
+
+
+@pytest.fixture
+def manager(db_session):
+    return fight_loop.MatchManager(db_session)
+
+
+@pytest.fixture
+def client(db_session):
+    """
+    TestClient with FastAPI's get_db dependency overridden to yield the
+    test's db_session. Cleared on teardown so the override doesn't leak.
+    """
+    def _override_get_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = _override_get_db
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.pop(get_db, None)
 
 
 @pytest.fixture

@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import pathlib
 import re
 import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
@@ -8,10 +9,15 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from backend_arena.src.database.db_manager import Battle, BattleMemory, ChatHistory
+from backend_arena.src.database.db_manager import (
+    Battle,
+    BattleMemory,
+    ChatHistory,
+    SessionLocal,
+)
 from backend_arena.src.database.memory_engine import run_memory_compression
 from backend_arena.src.engine import llm_router, prompt_builder
-from backend_arena.src.exceptions import BattleNotFoundError, BattleTurnLimitError
+from backend_arena.src.exceptions import BattleNotFoundError, BattleTurnLimitError, PersonaNotFoundError
 from backend_arena.src.schemas.payloads import (
     EntityConfig,
     ExecuteActionResponse,
@@ -41,6 +47,68 @@ _FALLBACK_STUB = {
 }
 
 
+# Personas dir — env-overridable so the package can be relocated/installed
+_PERSONAS_DIR = pathlib.Path(
+    os.getenv(
+        "ARENA_PERSONAS_DIR",
+        str(pathlib.Path(__file__).parent.parent / "personas"),
+    )
+)
+
+# Module-level executor — reused across all eviction cycles instead of
+# constructing/tearing down a pool per iteration.
+_SUMMARIZER_POOL = ThreadPoolExecutor(
+    max_workers=int(os.getenv("ARENA_SUMMARIZER_WORKERS", "2")),
+    thread_name_prefix="arena-summariser",
+)
+
+
+def _clamp_int(value, lo: int, hi: int, default: int = 0) -> int:
+    """Coerce LLM telemetry value to int and clamp to [lo, hi]. Falls back to default on bad input."""
+    try:
+        return max(lo, min(hi, int(value)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _compress_in_worker_session(
+    battle_id: str,
+    old_summary: str,
+    evicted: list[ChatMessage],
+    turn: int,
+) -> str:
+    """
+    Run the summariser using a FRESH session owned by the worker thread.
+
+    SQLAlchemy Session is not thread-safe; the request session cannot be
+    shared with this executor thread. We open + commit + close locally.
+    """
+    worker_db = SessionLocal()
+    try:
+        result = run_memory_compression(battle_id, old_summary, evicted, turn, worker_db)
+        worker_db.commit()
+        return result
+    except Exception:
+        worker_db.rollback()
+        raise
+    finally:
+        worker_db.close()
+
+
+def _enrich_with_persona(entity: EntityConfig) -> EntityConfig:
+    if not entity.persona_id:
+        return entity
+    persona_path = _PERSONAS_DIR / f"{entity.persona_id}.json"
+    if not persona_path.exists():
+        raise PersonaNotFoundError(f"Persona '{entity.persona_id}' not found")
+    data = json.loads(persona_path.read_text(encoding="utf-8"))
+    return entity.model_copy(update={
+        "backstory": data.get("backstory"),
+        "vocabulary": data.get("vocabulary"),
+        "debate_tactics": data.get("debate_tactics"),
+    })
+
+
 def _parse_llm_output(raw: str) -> dict:
     try:
         return json.loads(raw)
@@ -62,11 +130,13 @@ class MatchManager:
     def create_battle(self, payload: InitializeBattleRequest) -> str:
         battle_id = str(uuid.uuid4())
         schema_tag = {"schema_version": _SCHEMA_VERSION}
+        enriched_1 = _enrich_with_persona(payload.entity_1)
+        enriched_2 = _enrich_with_persona(payload.entity_2)
         db_battle = Battle(
             id=battle_id,
             match_config={**payload.match_config.model_dump(), **schema_tag},
-            entity_1={**payload.entity_1.model_dump(), **schema_tag},
-            entity_2={**payload.entity_2.model_dump(), **schema_tag},
+            entity_1={**enriched_1.model_dump(), **schema_tag},
+            entity_2={**enriched_2.model_dump(), **schema_tag},
             turn=0,
             status="active",
         )
@@ -108,9 +178,13 @@ class MatchManager:
         memory_row = self.db.get(BattleMemory, battle_id)
         long_term = memory_row.summary_text if memory_row else ""
 
-        # Build system prompt with memory injected at the top
+        # Build system prompt with memory and shared world-premise injected.
+        # battle_context is static for the full battle — stored in match_config at init.
         system_prompt = prompt_builder.build_system_prompt(
-            entity, mc["current_vibe"], long_term
+            entity,
+            mc["current_vibe"],
+            long_term,
+            battle_context=mc.get("battle_context") or "",
         )
 
         # Reconstruct context window from all non-summarized DB rows.
@@ -193,16 +267,14 @@ class MatchManager:
                 break
             evicted = [window[1], window[2]]
             try:
-                with ThreadPoolExecutor(max_workers=1) as _pool:
-                    _future = _pool.submit(
-                        run_memory_compression,
-                        battle_id,
-                        current_summary,
-                        evicted,
-                        turn,
-                        self.db,
-                    )
-                    current_summary = _future.result(timeout=_SUMMARIZER_TIMEOUT_S)
+                _future = _SUMMARIZER_POOL.submit(
+                    _compress_in_worker_session,
+                    battle_id,
+                    current_summary,
+                    evicted,
+                    turn,
+                )
+                current_summary = _future.result(timeout=_SUMMARIZER_TIMEOUT_S)
 
                 # Update is_summarized strictly by PK — never by content or role
                 self.db.query(ChatHistory).filter(
@@ -224,13 +296,12 @@ class MatchManager:
                     _SUMMARIZER_TIMEOUT_S,
                 )
                 break
-            except Exception as exc:
-                log.warning(
-                    "Memory compression failed (battle=%s, turn=%d): %s — "
+            except Exception:
+                log.exception(
+                    "Memory compression failed (battle=%s, turn=%d) — "
                     "retaining window for next-turn retry.",
                     battle_id,
                     turn,
-                    exc,
                 )
                 break
 
@@ -249,8 +320,8 @@ class MatchManager:
             tts_ready_text=tts_text,
             voice_params=VoiceParams(id=entity.voice_id, speed=entity.voice_speed),
             telemetry=Telemetry(
-                sentiment_score=int(result["sentiment_score"]),
-                aggression_level=int(result["aggression_level"]),
+                sentiment_score=_clamp_int(result.get("sentiment_score", 0), -100, 100),
+                aggression_level=_clamp_int(result.get("aggression_level", 0), 0, 100),
             ),
         )
 

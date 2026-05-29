@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from backend_arena.src.engine.llm_router import MockAdapter, OllamaAdapter, route, _adapter_cache
+from backend_arena.src.engine.llm_router import MockAdapter, OllamaAdapter, route
 from backend_arena.src.exceptions import LLMConnectionError
 from backend_arena.src.schemas.types import ChatMessage
 
@@ -47,7 +47,6 @@ def test_route_unknown_llm_raises():
 def test_ollama_invalid_url_raises_connection_error(monkeypatch):
     monkeypatch.setenv("OLLAMA_BASE_URL", "http://127.0.0.1:19999")
     monkeypatch.setenv("OLLAMA_MODEL", "llama3")
-    _adapter_cache.pop("ollama", None)
 
     adapter = OllamaAdapter()
     with pytest.raises(LLMConnectionError):

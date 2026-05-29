@@ -68,11 +68,14 @@ class BattleMemory(Base):
 
 
 def get_db():
-    db = SessionLocal()
+    db = None
     try:
+        db = SessionLocal()
         yield db
     except Exception:
-        db.rollback()
+        if db is not None:
+            db.rollback()
         raise
     finally:
-        db.close()
+        if db is not None:
+            db.close()

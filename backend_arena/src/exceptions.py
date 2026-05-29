@@ -24,3 +24,7 @@ class BattleNotFoundError(ArenaError):
 
 class BattleTurnLimitError(ArenaError):
     """next_turn called on a battle that is complete or at turn_limit."""
+
+
+class PersonaNotFoundError(ArenaError):
+    """Persona JSON file not found for the given persona_id."""

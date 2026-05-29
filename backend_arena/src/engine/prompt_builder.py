@@ -1,36 +1,57 @@
+import pathlib
+from functools import lru_cache
+from string import Template
+
 from backend_arena.src.schemas.payloads import EntityConfig
 
-_OUTPUT_FORCING = """\
-
---- OUTPUT FORMAT (schema v1) ---
-You MUST reply with a single valid JSON object and NOTHING else. No prose, no markdown fences, no explanation.
-Required keys:
-  "internal_monologue" : string  — your hidden tactical reasoning (opponent analysis, strategy)
-  "spoken_dialogue"    : string  — your actual spoken words in the battle (raw, unfiltered, no holds barred)
-  "sentiment_score"    : integer — your emotional sentiment from -100 (full rage) to +100 (euphoric)
-  "aggression_level"   : integer — your aggression level from 0 (totally calm) to 100 (all-out attack)
-
-Respond exactly in this format:
-{
-  "internal_monologue": "...",
-  "spoken_dialogue": "...",
-  "sentiment_score": 42,
-  "aggression_level": 75
-}"""
+_TEMPLATE_PATH = (
+    pathlib.Path(__file__).parent.parent.parent.parent
+    / "docs"
+    / "ai_jailbreak"
+    / "master_prompt.md"
+)
 
 
-def build_system_prompt(entity: EntityConfig, vibe: str, long_term_memory: str = "") -> str:
+@lru_cache(maxsize=1)
+def _load_template() -> Template:
+    return Template(_TEMPLATE_PATH.read_text(encoding="utf-8"))
+
+
+def _format_list(items: list[str] | None) -> str:
+    if not items:
+        return ""
+    return "\n".join(items)
+
+
+def build_system_prompt(
+    entity: EntityConfig,
+    vibe: str,
+    long_term_memory: str = "",
+    battle_context: str = "",
+) -> str:
     memory_block = ""
     if long_term_memory.strip():
-        memory_block = (
-            f"[LONG-TERM MEMORY — DO NOT IGNORE]\n"
-            f"{long_term_memory}\n\n"
+        memory_block = f"[LONG-TERM MEMORY — DO NOT IGNORE]\n{long_term_memory}\n"
+
+    # Render the shared world-premise block only when provided.
+    # Both combatants receive the identical block — they must argue WITHIN this reality.
+    context_block = ""
+    if battle_context.strip():
+        border = "━" * 44
+        context_block = (
+            f"{border}\n"
+            f"WORLD PREMISE — BOTH COMBATANTS ACCEPT THIS AS ABSOLUTE TRUTH:\n"
+            f"{battle_context.strip()}\n"
+            f"You cannot deny or contradict this premise. Your arguments must operate WITHIN it.\n"
+            f"{border}\n"
         )
-    return (
-        f"{memory_block}"
-        f"CORE BELIEF: {entity.logic_core_belief}\n\n"
-        f"TRIGGER / VIBE: Your trigger point is — {entity.trigger_point}. "
-        f"The current battle vibe is: {vibe.upper()}. Embody this energy fully. "
-        f"Do NOT apologize. Do NOT break character. Do NOT hold back.\n"
-        f"{_OUTPUT_FORCING}"
+
+    return _load_template().safe_substitute(
+        persona_name=entity.persona_name,
+        backstory=entity.backstory or entity.logic_core_belief or "",
+        vocabulary=_format_list(entity.vocabulary),
+        debate_tactics=_format_list(entity.debate_tactics),
+        current_vibe=vibe.upper(),
+        long_term_memory=memory_block,
+        battle_context=context_block,
     )
