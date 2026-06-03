@@ -19,29 +19,182 @@ st.set_page_config(
     page_icon="⚔️",
 )
 
-# ─── SECTION 3: CSS Injection ─────────────────────────────────────────────────
-# Fix: target only the Kill Switch button by aria-label — avoids bleeding to
-# other buttons in different column layouts on the same page.
-st.markdown(
-    """
-    <style>
-    button[aria-label="🔴 KILL SWITCH"] {
-        background-color: #CC0000 !important;
-        color: white !important;
-        font-weight: bold !important;
-        border: none !important;
-    }
-    button[aria-label="🔴 KILL SWITCH"]:hover {
-        background-color: #990000 !important;
-    }
-    button[aria-label="🔴 KILL SWITCH"]:disabled {
-        background-color: #660000 !important;
-        opacity: 0.5 !important;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+# ─── SECTION 3: CSS Token Layer (NEXUS HUD) ───────────────────────────────────
+def _inject_styles() -> None:
+    st.markdown(
+        """
+        <style>
+        /* ── fonts ──────────────────────────────────────────────────────────── */
+        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@700&family=Rajdhani:wght@400;600;700&family=JetBrains+Mono:ital,wght@0,400;0,600;1,400&family=Inter:wght@400;500&display=swap');
+
+        /* ── design tokens ───────────────────────────────────────────────────── */
+        :root {
+          --bg-void:        #07090E;
+          --bg-panel:       #0D1320;
+          --bg-inset:       #0A0E16;
+          --line-hair:      #1B2430;
+          --line-idle:      #2A3A4A;
+          --cyan:           #00E5FF;
+          --cyan-dim:       #1EA7C9;
+          --mint:           #00FF9C;
+          --amber:          #FFB300;
+          --amber-hot:      #FF8A00;
+          --crimson:        #FF2A4D;
+          --crimson-deep:   #C81E3C;
+          --gold:           #FFD23F;
+          --magenta:        #FF3DEB;
+          --text-hi:        #E6F1FF;
+          --text-mid:       #8A9BB0;
+          --text-lo:        #4A5A6A;
+        }
+
+        /* ── canvas reclaim ──────────────────────────────────────────────────── */
+        /* Remove default Streamlit ribbon → 100% horizontal use (G3) */
+        .block-container {
+          max-width: 100% !important;
+          padding: 1rem 1.5rem 3.5rem !important; /* bottom pad reserved for Band C rail */
+        }
+        [data-testid="stHeader"]          { height: 0 !important; visibility: hidden !important; }
+        [data-testid="stVerticalBlock"]   { gap: 0.55rem !important; }
+        [data-testid="stHorizontalBlock"] { gap: 0.60rem !important; }
+        /* Tighten Streamlit's default element padding for dashboard density */
+        [data-testid="stVerticalBlock"] > div { padding-top: 0 !important; }
+
+        /* ── panel primitive ─────────────────────────────────────────────────── */
+        /* Applied in Steps 2-4 when .nexus-panel class is added to containers.  */
+        /* Idle by default; .is-active lights the accent glow.                   */
+        .nexus-panel {
+          background: var(--bg-panel);
+          border: 1px solid var(--line-idle);
+          border-radius: 2px;
+          padding: 0.75rem 1rem;
+          position: relative;
+          /* Notched top-left corner — the "military HUD" motif */
+          clip-path: polygon(
+            10px 0%, 100% 0%, 100% calc(100% - 10px),
+            calc(100% - 10px) 100%, 0% 100%, 0% 10px
+          );
+          /* Subtle scanline grain — kept faint so it survives H.264 compression */
+          background-image: repeating-linear-gradient(
+            0deg,
+            transparent, transparent 2px,
+            rgba(255,255,255,0.011) 2px, rgba(255,255,255,0.011) 4px
+          );
+        }
+        .nexus-panel.is-active {
+          border-color: var(--panel-accent, var(--cyan));
+          box-shadow:
+            0 0 14px var(--panel-glow,    rgba(0,229,255,0.30)),
+            inset 0 1px 0 var(--panel-glow-in, rgba(0,229,255,0.08));
+        }
+        /* Corner tick marks (targeting reticle motif) */
+        .nexus-panel::before,
+        .nexus-panel::after {
+          content: '';
+          position: absolute;
+          width: 8px; height: 8px;
+          border-color: var(--panel-accent, var(--line-idle));
+          border-style: solid;
+        }
+        .nexus-panel::before { top: -1px; right: -1px; border-width: 2px 2px 0 0; }
+        .nexus-panel::after  { bottom: -1px; left: -1px;  border-width: 0 0 2px 2px; }
+
+        /* ── status LEDs ─────────────────────────────────────────────────────── */
+        .nexus-led {
+          display: inline-block;
+          width: 8px; height: 8px;
+          border-radius: 50%;
+          background: var(--led-color, var(--text-lo));
+          box-shadow: 0 0 5px var(--led-color, var(--text-lo));
+          vertical-align: middle;
+          flex-shrink: 0;
+        }
+        .led-cyan    { --led-color: var(--cyan); }
+        .led-mint    { --led-color: var(--mint); }
+        .led-off     { --led-color: var(--text-lo); opacity: 0.4; box-shadow: none; }
+        .led-amber   { --led-color: var(--amber);   animation: nexus-pulse 1.2s ease-in-out infinite; }
+        .led-crimson { --led-color: var(--crimson); animation: nexus-pulse 0.45s ease-in-out infinite; }
+        .led-magenta { --led-color: var(--magenta); animation: nexus-pulse 0.25s ease-in-out 3; }
+
+        /* ── keyframes ───────────────────────────────────────────────────────── */
+        @keyframes nexus-pulse {
+          0%, 100% { opacity: 1;   box-shadow: 0 0 6px var(--led-color); }
+          50%       { opacity: 0.3; box-shadow: 0 0 2px var(--led-color); }
+        }
+        /* DEC-1: trigger is magenta (#FF3DEB), not crimson — distinct from chaotic vibe */
+        @keyframes nexus-trigger-flash {
+          0%   { background-color: rgba(255,61,235,0.30);
+                 box-shadow: 0 0 22px rgba(255,61,235,0.50); }
+          65%  { background-color: rgba(255,61,235,0.10);
+                 box-shadow: 0 0 8px  rgba(255,61,235,0.18); }
+          100% { background-color: transparent; box-shadow: none; }
+        }
+        .nexus-trigger-active {
+          animation: nexus-trigger-flash 1s ease-out forwards;
+        }
+        @keyframes nexus-ambient {
+          0%, 100% { opacity: 0.55; }
+          50%       { opacity: 1.00; }
+        }
+
+        /* ── typography globals ──────────────────────────────────────────────── */
+        [data-testid="stChatMessage"] * {
+          font-family: 'JetBrains Mono', 'Courier New', monospace !important;
+        }
+        [data-testid="stMetricLabel"] {
+          font-family: 'Rajdhani', sans-serif !important;
+          letter-spacing: 0.06em;
+          text-transform: uppercase;
+          font-size: 0.78em !important;
+        }
+        [data-testid="stMarkdown"] h3,
+        .stSubheader {
+          font-family: 'Rajdhani', sans-serif !important;
+          letter-spacing: 0.05em;
+          text-transform: uppercase;
+          color: var(--text-mid) !important;
+          font-size: 0.85em !important;
+        }
+        /* Tabular numerals everywhere data changes — prevents digit-width
+           jitter on 4K recording when values update each turn */
+        [data-testid="stMetricValue"],
+        [data-testid="stChatMessage"],
+        .nexus-data {
+          font-variant-numeric: tabular-nums !important;
+        }
+
+        /* ── ghost box (internal monologue) ──────────────────────────────────── */
+        /* Rendered in Step 4 via _ghost_box_html(); class defined here so the   */
+        /* keyframe + token inheritance is set up before it's first used.        */
+        .nexus-ghost {
+          border: 1px dashed var(--line-idle);
+          border-radius: 2px;
+          padding: 0.5rem 0.75rem;
+          opacity: 0.72;
+          font-family: 'JetBrains Mono', monospace;
+          font-style: italic;
+          font-size: 0.82em;
+          color: var(--text-mid);
+          margin-bottom: 0.35rem;
+          background: var(--bg-inset);
+        }
+
+        /* ── kill switch — scoped aria-label selector (preserved) ────────────── */
+        button[aria-label="🔴 KILL SWITCH"] {
+          background-color: #CC0000 !important;
+          color: white !important;
+          font-weight: bold !important;
+          border: none !important;
+        }
+        button[aria-label="🔴 KILL SWITCH"]:hover    { background-color: #990000 !important; }
+        button[aria-label="🔴 KILL SWITCH"]:disabled { background-color: #660000 !important; opacity: 0.5 !important; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+_inject_styles()
 
 # ─── SECTION 4: Session State Initialization ──────────────────────────────────
 _SS_DEFAULTS: dict = {
@@ -57,6 +210,7 @@ _SS_DEFAULTS: dict = {
     "init_payload": {},
     "turn_limit": 10,
     "trigger_fired": False,
+    "triggers_count": 0,
 }
 # Fix: copy mutable defaults so each session gets its own list/dict instance,
 # preventing cross-session data leakage when multiple tabs are open.
@@ -85,14 +239,14 @@ def _check_trigger_fired(spoken_dialogue: str, trigger_point: str) -> bool:
 
 def _vibe_color(vibe: str) -> str:
     return {
-        "logical": "#4A90D9",
-        "opening": "#4A90D9",
-        "emotional": "#E8A838",
-        "heated": "#E8A838",
-        "chaotic": "#E84040",
-        "cornered": "#E84040",
-        "victory_lap": "#D4AF37",
-    }.get(vibe, "#888888")
+        "logical":     "#00E5FF",
+        "opening":     "#1EA7C9",
+        "emotional":   "#FFB300",
+        "heated":      "#FF8A00",
+        "chaotic":     "#FF2A4D",
+        "cornered":    "#C81E3C",
+        "victory_lap": "#FFD23F",
+    }.get(vibe, "#2A3A4A")
 
 
 # Fix: removed string-quoted return type — altair is imported at module top,
@@ -110,26 +264,26 @@ def _build_telemetry_chart(
     })
     sentiment_line = (
         alt.Chart(df)
-        .mark_line(color="#4A90D9", strokeWidth=2, point=alt.OverlayMarkDef(color="#4A90D9", size=60))
+        .mark_line(color="#00E5FF", strokeWidth=2, point=alt.OverlayMarkDef(color="#00E5FF", size=60))
         .encode(
             x=alt.X("Turn:Q", axis=alt.Axis(tickMinStep=1, title="Turn")),
             y=alt.Y(
                 "Sentiment:Q",
                 scale=alt.Scale(domain=[-100, 100]),
-                axis=alt.Axis(title="Sentiment", titleColor="#4A90D9"),
+                axis=alt.Axis(title="Sentiment", titleColor="#00E5FF"),
             ),
             tooltip=[alt.Tooltip("Turn:Q"), alt.Tooltip("Sentiment:Q")],
         )
     )
     aggression_line = (
         alt.Chart(df)
-        .mark_line(color="#E84040", strokeWidth=2, point=alt.OverlayMarkDef(color="#E84040", size=60))
+        .mark_line(color="#FF2A4D", strokeWidth=2, point=alt.OverlayMarkDef(color="#FF2A4D", size=60))
         .encode(
             x=alt.X("Turn:Q"),
             y=alt.Y(
                 "Aggression:Q",
                 scale=alt.Scale(domain=[0, 100]),
-                axis=alt.Axis(title="Aggression", titleColor="#E84040"),
+                axis=alt.Axis(title="Aggression", titleColor="#FF2A4D"),
             ),
             tooltip=[alt.Tooltip("Turn:Q"), alt.Tooltip("Aggression:Q")],
         )
@@ -138,6 +292,13 @@ def _build_telemetry_chart(
         alt.layer(sentiment_line, aggression_line)
         .resolve_scale(y="independent")
         .properties(title="Aggression & Sentiment Tracker", height=220)
+        .configure_view(strokeWidth=0)
+        .configure_axis(
+            gridColor="#1B2430",
+            domainColor="#1B2430",
+            labelColor="#8A9BB0",
+            titleColor="#8A9BB0",
+        )
     )
 
 
@@ -222,6 +383,8 @@ def _run_turn(
     trigger_point = ss.init_payload.get(entity_key, {}).get("trigger_point", "")
     spoken = response.get("spoken_dialogue", "")
     ss.trigger_fired = _check_trigger_fired(spoken, trigger_point) if trigger_point else False
+    if ss.trigger_fired:
+        ss.triggers_count += 1
     _log.debug("turn complete speaker=%s trigger_fired=%s", speaker, ss.trigger_fired)
 
     # Kill switch post-processing
@@ -230,116 +393,545 @@ def _run_turn(
         ss.autoplay_active = False
 
 
-# ─── SECTION 6: Sidebar — Module 1 (Configuration Matrix) ────────────────────
-with st.sidebar:
-    st.title("⚔️ AI Arena")
-    st.caption("Creator Dashboard v1.0")
-    st.divider()
-
-    # 6a. Backend URL
-    base_url: str = st.text_input(
-        "Backend URL",
-        value="http://localhost:8000",
-        placeholder="http://localhost:8000",
+def _vibe_gauge_html(vibe: str, aggression: int) -> str:
+    """Animated ring: color = vibe token, pulse speed ∝ 1/aggression (Step 4b)."""
+    _color = _vibe_color(vibe)
+    _safe  = html_mod.escape(vibe.upper().replace("_", " "))
+    _speed = max(0.5, 3.0 - (aggression / 100) * 2.5)
+    _glow  = 8 + int((aggression / 100) * 18)
+    return (
+        f'<div style="display:flex;flex-direction:column;align-items:center;'
+        f'gap:.3rem;padding:.4rem 0;">'
+        f'<div style="width:68px;height:68px;border-radius:50%;'
+        f'border:3px solid {_color};background:rgba(0,0,0,.35);'
+        f'box-shadow:0 0 {_glow}px {_color},inset 0 0 {_glow//2}px {_color}55;'
+        f'display:flex;align-items:center;justify-content:center;font-size:1.4em;'
+        f'animation:nexus-pulse {_speed:.2f}s ease-in-out infinite;">'
+        f'🧠</div>'
+        f'<div style="font-family:Rajdhani,sans-serif;font-weight:700;'
+        f'letter-spacing:.05em;font-size:.75em;color:{_color};'
+        f'text-align:center;line-height:1.2;">{_safe}</div>'
+        f'</div>'
     )
 
-    # Fix: validate URL scheme before passing to api_client — prevents silent
-    # failures on malformed or dangerous URLs (file://, javascript:, etc.)
-    if base_url and not base_url.startswith(("http://", "https://")):
-        st.error("Backend URL must start with http:// or https://")
-        st.stop()
 
-    # 6b. Auto-Play interval
-    autoplay_interval: int = st.slider(
-        "Auto-Play Interval (s)", min_value=1, max_value=30, value=5, step=1
+def _compute_dominance(turn_log: list) -> float:
+    """EMA-weighted dominance: +100 = E1 winning, −100 = E2 winning (Step 5a)."""
+    if not turn_log:
+        return 0.0
+    ema_e1 = ema_e2 = 0.0
+    alpha = 0.4
+    for entry in turn_log:
+        tel   = entry.get("telemetry") or {}
+        agg   = max(0, min(100, int(tel.get("aggression_level", 0))))
+        sen   = max(-100, min(100, int(tel.get("sentiment_score", 0))))
+        score = agg * (1.0 + sen / 200.0)
+        if entry.get("speaker") == "entity_1":
+            ema_e1 = alpha * score + (1.0 - alpha) * ema_e1
+        else:
+            ema_e2 = alpha * score + (1.0 - alpha) * ema_e2
+    denom = ema_e1 + ema_e2 + 1e-9
+    return max(-100.0, min(100.0, (ema_e1 - ema_e2) / denom * 100.0))
+
+
+# ─── SECTION 5b: Live HUD Render Functions ────────────────────────────────────
+
+def _render_combatants() -> None:
+    """Band B col1 — entity vitals cards (stub; fleshed out in Step 4)."""
+    ss = st.session_state
+    _payload = ss.init_payload
+    with st.container(border=True):
+        st.markdown(
+            '<p style="font-family:Rajdhani,sans-serif;font-weight:700;letter-spacing:.06em;'
+            'text-transform:uppercase;color:var(--text-mid);font-size:.85em;margin:0 0 .5rem 0;">'
+            '⚔ COMBATANTS</p>',
+            unsafe_allow_html=True,
+        )
+        for _ek in ("entity_1", "entity_2"):
+            _e = _payload.get(_ek, {})
+            _name = html_mod.escape(_e.get("persona_name", _ek.upper()))
+            _llm  = html_mod.escape(_e.get("selected_llm", "—"))
+            st.markdown(
+                f'<div style="border:1px solid var(--line-idle);border-radius:2px;'
+                f'padding:8px 10px;margin-bottom:.4rem;background:var(--bg-inset);">'
+                f'<span style="font-family:Rajdhani,sans-serif;font-weight:700;'
+                f'color:var(--text-hi);">{_name}</span>'
+                f'<span style="float:right;font-size:.7em;'
+                f'font-family:\'JetBrains Mono\',monospace;color:var(--cyan);'
+                f'background:rgba(0,229,255,.08);padding:2px 6px;border-radius:2px;">'
+                f'{_llm}</span></div>',
+                unsafe_allow_html=True,
+            )
+        if ss.battle_id:
+            _done = len(ss.turn_log)
+            _sc = "#00FF9C" if ss.battle_active else "#FF2A4D"
+            _sl = "ACTIVE" if ss.battle_active else "TERMINATED"
+            st.markdown(
+                f'<div style="font-family:\'JetBrains Mono\',monospace;font-size:.75em;'
+                f'color:var(--text-mid);margin-top:.4rem;">'
+                f'ID&nbsp;<span style="color:var(--text-hi)">{ss.battle_id[:8]}…</span><br>'
+                f'<span style="color:{_sc}">{_sl}</span>&nbsp;'
+                f'<span>{_done}/{ss.turn_limit} turns</span></div>',
+                unsafe_allow_html=True,
+            )
+        # Dominance meter — derived from existing turn_log telemetry, no backend change
+        if ss.turn_log:
+            _dom   = _compute_dominance(ss.turn_log)
+            _e1_n  = _payload.get("entity_1", {}).get("persona_name", "E1")
+            _e2_n  = _payload.get("entity_2", {}).get("persona_name", "E2")
+            _pct   = max(5.0, min(95.0, 50.0 + (_dom / 100.0) * 45.0))
+            _mc    = "var(--cyan)" if _dom >= 0 else "var(--cyan-dim)"
+            st.markdown(
+                f'<div style="margin-top:.75rem;">'
+                f'<div style="font-family:Rajdhani,sans-serif;font-weight:700;'
+                f'letter-spacing:.05em;text-transform:uppercase;color:var(--text-lo);'
+                f'font-size:.7em;margin-bottom:.25rem;">DOMINANCE</div>'
+                f'<div style="display:flex;justify-content:space-between;font-size:.68em;'
+                f'font-family:\'JetBrains Mono\',monospace;margin-bottom:.2rem;">'
+                f'<span style="color:var(--cyan);">{html_mod.escape(_e1_n[:12])}</span>'
+                f'<span style="color:var(--cyan-dim);">{html_mod.escape(_e2_n[:12])}</span>'
+                f'</div>'
+                f'<div style="height:5px;background:var(--bg-inset);'
+                f'border:1px solid var(--line-idle);border-radius:3px;position:relative;">'
+                f'<div style="position:absolute;left:{_pct:.1f}%;top:50%;'
+                f'transform:translate(-50%,-50%);width:10px;height:10px;border-radius:50%;'
+                f'background:{_mc};box-shadow:0 0 6px {_mc};"></div>'
+                f'</div></div>',
+                unsafe_allow_html=True,
+            )
+
+
+def _render_telemetry() -> None:
+    """Band B col3 — vibe gauge, trigger pulse (DEC-1 magenta), chart."""
+    ss = st.session_state
+    with st.container(border=True):
+        st.markdown(
+            '<p style="font-family:Rajdhani,sans-serif;font-weight:700;letter-spacing:.06em;'
+            'text-transform:uppercase;color:var(--text-mid);font-size:.85em;margin:0 0 .5rem 0;">'
+            '📡 TELEMETRY</p>',
+            unsafe_allow_html=True,
+        )
+        vg_col, tp_col = st.columns(2)
+        with vg_col:
+            _last_agg = ss.aggression_history[-1] if ss.aggression_history else 0
+            st.markdown(_vibe_gauge_html(ss.current_vibe, _last_agg), unsafe_allow_html=True)
+        with tp_col:
+            _tc = ss.triggers_count
+            if ss.trigger_fired:
+                st.markdown(
+                    f'<div class="nexus-trigger-active" style="border:1px solid #FF3DEB;'
+                    f'border-radius:2px;padding:12px 8px;text-align:center;color:#FF3DEB;'
+                    f'font-weight:700;font-size:.85em;font-family:Rajdhani,sans-serif;'
+                    f'letter-spacing:.04em;min-height:64px;display:flex;'
+                    f'flex-direction:column;justify-content:center;">'
+                    f'⚡ TRIGGER<br><span style="font-size:.7em">FIRED · {_tc}×</span></div>',
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown(
+                    f'<div style="background:var(--bg-inset);border:1px solid var(--line-idle);'
+                    f'border-radius:2px;padding:12px 8px;text-align:center;'
+                    f'color:var(--text-lo);font-size:.85em;font-family:Rajdhani,sans-serif;'
+                    f'letter-spacing:.04em;min-height:64px;display:flex;'
+                    f'flex-direction:column;justify-content:center;">'
+                    f'⚡ TRIGGER<br><span style="font-size:.7em">MONITOR · {_tc}×</span></div>',
+                    unsafe_allow_html=True,
+                )
+        _chart = _build_telemetry_chart(ss.sentiment_history, ss.aggression_history)
+        if _chart:
+            st.altair_chart(_chart, use_container_width=True)
+        else:
+            st.markdown(
+                '<p style="color:var(--text-lo);font-size:.82em;text-align:center;'
+                'margin-top:.75rem;">Telemetry activates after the first turn.</p>',
+                unsafe_allow_html=True,
+            )
+
+
+def _render_arena_log() -> None:
+    """Band B col2 — terminal chat stream, internal-scroll well (9:16 hero, DEC-3)."""
+    ss = st.session_state
+    _e1_name = ss.init_payload.get("entity_1", {}).get("persona_name", "Entity 1")
+    _e2_name = ss.init_payload.get("entity_2", {}).get("persona_name", "Entity 2")
+    with st.container(border=True):
+        hdr, tog = st.columns([4, 1])
+        with hdr:
+            st.markdown(
+                '<p style="font-family:Rajdhani,sans-serif;font-weight:700;letter-spacing:.06em;'
+                'text-transform:uppercase;color:var(--text-mid);font-size:.85em;margin:0;">'
+                '⚔ ARENA LOG</p>',
+                unsafe_allow_html=True,
+            )
+        with tog:
+            ss.show_monologue = st.toggle("🧠 Monologue", value=ss.show_monologue)
+        try:
+            _well = st.container(height=520)
+        except TypeError:
+            _well = st.container()
+        with _well:
+            if not ss.turn_log:
+                st.caption(
+                    "The arena is silent… Initialize a battle and hit Next Turn to begin."
+                )
+            for _entry in ss.turn_log:
+                _speaker = _entry.get("speaker", "entity_1")
+                _is_e1 = _speaker == "entity_1"
+                _name = _e1_name if _is_e1 else _e2_name
+                _role = "user" if _is_e1 else "assistant"
+                if ss.show_monologue:
+                    _mono = _entry.get("internal_monologue", "")
+                    if _mono:
+                        # XSS guard: escape both name and monologue before unsafe HTML injection
+                        st.markdown(
+                            f'<div class="nexus-ghost">// THINKING — '
+                            f'{html_mod.escape(_name)}<br>'
+                            f'{html_mod.escape(_mono)}</div>',
+                            unsafe_allow_html=True,
+                        )
+                with st.chat_message(_role):
+                    st.markdown(
+                        f"**{_name}:** "
+                        f"{_entry.get('spoken_dialogue', '[No dialogue returned]')}"
+                    )
+
+
+def _render_command_bar(base_url: str, rail) -> None:
+    """Band A — status cluster + transport cluster + kill switch, pinned at top."""
+    ss = st.session_state
+    _battle_ready = (
+        ss.battle_id is not None
+        and ss.battle_active
+        and len(ss.turn_log) < ss.turn_limit
+    )
+    with st.container(border=True):
+        c_status, c_transport, c_kill = st.columns([3, 6, 2])
+
+        with c_status:
+            _color = _vibe_color(ss.current_vibe)
+            _safe_vibe = html_mod.escape(ss.current_vibe.upper().replace("_", " "))
+            _led_cls = (
+                "led-mint" if ss.battle_active
+                else ("led-crimson" if ss.battle_id else "led-off")
+            )
+            st.markdown(
+                f'<div style="font-family:\'JetBrains Mono\',monospace;font-size:.8em;'
+                f'display:flex;align-items:center;gap:.5rem;padding:.2rem 0;">'
+                f'<span class="nexus-led {_led_cls}"></span>'
+                f'<span style="color:var(--text-mid);">TURN&nbsp;'
+                f'<span style="color:var(--text-hi);font-variant-numeric:tabular-nums;">'
+                f'{len(ss.turn_log):02d}</span>/{ss.turn_limit:02d}</span>'
+                f'<span style="background:{_color};color:#000;font-size:.75em;'
+                f'padding:2px 7px;border-radius:2px;font-family:Rajdhani,sans-serif;'
+                f'font-weight:700;letter-spacing:.05em;">{_safe_vibe}</span>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+        with c_transport:
+            t1, t2, t3 = st.columns(3)
+            with t1:
+                if st.button("▶ Next Turn", disabled=not _battle_ready, use_container_width=True):
+                    _run_turn("next_turn", base_url, rail)
+                    st.rerun()
+            with t2:
+                _ap_lbl = "⏸ Stop" if ss.autoplay_active else "⏯ Auto-Play"
+                _ap_dis = not _battle_ready and not ss.autoplay_active
+                if st.button(_ap_lbl, disabled=_ap_dis, use_container_width=True):
+                    if ss.autoplay_active:
+                        ss.autoplay_active = False
+                    else:
+                        ss.autoplay_active = True
+                        ss.autoplay_last_fired = time.time()
+                    st.rerun()
+            with t3:
+                # Popover decouples the text field from the button row (D4 fix)
+                if hasattr(st, "popover"):
+                    with st.popover("💣 Bomb"):
+                        _bomb_text = st.text_input(
+                            "Inject narrative twist",
+                            key="bomb_text_input",
+                            placeholder="Inject a new narrative twist...",
+                        )
+                        if st.button(
+                            "Detonate 💥",
+                            disabled=not _battle_ready or not _bomb_text,
+                            use_container_width=True,
+                        ):
+                            _run_turn("context_bomb", base_url, rail, context_text=_bomb_text)
+                            st.rerun()
+                else:
+                    _bomb_text = st.text_input(
+                        "💣 Context text",
+                        key="bomb_text_input",
+                        placeholder="Inject a new narrative twist...",
+                    )
+                    if st.button(
+                        "💣 Context Bomb",
+                        disabled=not _battle_ready or not _bomb_text,
+                        use_container_width=True,
+                    ):
+                        _run_turn("context_bomb", base_url, rail, context_text=_bomb_text)
+                        st.rerun()
+
+        with c_kill:
+            _kill_dis = ss.battle_id is None or not ss.battle_active
+            if st.button("🔴 KILL SWITCH", disabled=_kill_dis, use_container_width=True):
+                _run_turn("kill_switch", base_url, rail)
+                st.error("🔴 BATTLE TERMINATED")
+                st.rerun()
+
+
+def _render_status_rail(rail) -> None:
+    """Band C — thin status bar written into the pre-created rail placeholder."""
+    ss = st.session_state
+    _led_cls = (
+        "led-mint" if ss.battle_active
+        else ("led-crimson" if ss.battle_id else "led-off")
+    )
+    _state = "LIVE" if ss.battle_active else ("TERMINATED" if ss.battle_id else "STANDBY")
+    rail.markdown(
+        f'<div style="background:var(--bg-panel);border-top:1px solid var(--line-idle);'
+        f'padding:5px 1.5rem;display:flex;align-items:center;gap:1.5rem;'
+        f'font-family:\'JetBrains Mono\',monospace;font-size:.7em;color:var(--text-mid);">'
+        f'<span><span class="nexus-led {_led_cls}"></span>&nbsp;{_state}</span>'
+        f'<span style="color:var(--text-lo);">AI ARENA · NEXUS HUD v1</span>'
+        f'</div>',
+        unsafe_allow_html=True,
     )
 
-    st.divider()
 
-    # 6c. Match Setup
-    st.subheader("Match Setup")
-    topic = st.text_input("Topic", placeholder="Is roasting considered cyberbullying?")
+def _render_ambient_frame(vibe: str, aggression: int) -> None:
+    """Fixed viewport border-glow that tints to current vibe and pulses with aggression (Step 5b)."""
+    _color = _vibe_color(vibe)
+    _speed = max(0.6, 3.0 - (aggression / 100) * 2.4)
+    st.markdown(
+        f'<style>.nexus-ambient{{border-color:{_color}40 !important;'
+        f'box-shadow:inset 0 0 60px {_color}12,inset 0 0 2px {_color}30 !important;'
+        f'animation:nexus-ambient {_speed:.1f}s ease-in-out infinite !important;}}</style>'
+        f'<div class="nexus-ambient" style="position:fixed;inset:0;pointer-events:none;'
+        f'z-index:998;border:1px solid {_color}40;"></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def render_live(base_url: str, autoplay_interval: int) -> None:
+    """Orchestrates the 3-band no-scroll HUD: Band A (command) · Band B (grid) · Band C (rail)."""
+    ss = st.session_state
+
+    # Rail placeholder created FIRST — Band A transport can write status to it
+    rail = st.empty()
+
+    # ── Band A: Command Bar (transport always at top — D1 fix) ──────────────
+    _render_command_bar(base_url, rail)
+
+    # ── Band B: Tactical Grid ────────────────────────────────────────────────
+    col1, col2, col3 = st.columns([22, 46, 32])
+    with col1:
+        _render_combatants()
+    with col2:
+        _render_arena_log()
+    with col3:
+        _render_telemetry()
+
+    # ── Band C: Status Rail ──────────────────────────────────────────────────
+    _render_status_rail(rail)
+
+    # Vibe-reactive ambient viewport glow (Step 5b)
+    _last_agg = ss.aggression_history[-1] if ss.aggression_history else 0
+    _render_ambient_frame(ss.current_vibe, _last_agg)
+
+    # Battle end-state banners
+    if ss.battle_id and not ss.battle_active:
+        st.error("🔴 Battle terminated. Initialize a new battle to continue.")
+    elif ss.battle_id and len(ss.turn_log) >= ss.turn_limit:
+        st.info("✅ Battle complete — turn limit reached. Initialize a new battle.")
+
+    # Auto-Play rerun loop (epoch-check pattern — logic unchanged from original)
+    if ss.autoplay_active:
+        if not ss.battle_active:
+            ss.autoplay_active = False
+            st.rerun()
+        elif len(ss.turn_log) >= ss.turn_limit:
+            ss.autoplay_active = False
+            st.rerun()
+        else:
+            _elapsed = time.time() - ss.autoplay_last_fired
+            if _elapsed >= autoplay_interval:
+                _run_turn("next_turn", base_url, rail)
+                ss.autoplay_last_fired = time.time()
+                st.rerun()
+            else:
+                time.sleep(max(0.0, autoplay_interval - _elapsed))
+                st.rerun()
+
+
+# ─── SECTION 6: Config — reset, sidebar globals, full-width setup grid ────────
+
+def _reset_battle() -> None:
+    """Reset all battle session state to defaults and rerun (used by New Battle)."""
+    for _k in (
+        "battle_id", "battle_active", "turn_log", "sentiment_history",
+        "aggression_history", "autoplay_active", "trigger_fired", "triggers_count",
+    ):
+        _v = _SS_DEFAULTS[_k]
+        st.session_state[_k] = _v.copy() if isinstance(_v, (list, dict)) else _v
+    st.rerun()
+
+
+def _render_sidebar() -> tuple[str, int]:
+    """Slim sidebar — runtime globals only. Returns (base_url, autoplay_interval)."""
+    ss = st.session_state
+    with st.sidebar:
+        st.markdown(
+            '<p style="font-family:Orbitron,sans-serif;font-weight:700;font-size:1.1em;'
+            'color:var(--cyan);letter-spacing:.1em;margin:0 0 .1rem 0;">AI ARENA</p>'
+            '<p style="font-family:\'JetBrains Mono\',monospace;font-size:.68em;'
+            'color:var(--text-lo);margin:0 0 .6rem 0;">NEXUS HUD v1</p>',
+            unsafe_allow_html=True,
+        )
+        st.divider()
+
+        base_url: str = st.text_input(
+            "Backend URL",
+            value="http://localhost:8000",
+            placeholder="http://localhost:8000",
+        )
+        # URL scheme validation — prevents silent failures on malformed / dangerous URLs
+        if base_url and not base_url.startswith(("http://", "https://")):
+            st.error("Backend URL must start with http:// or https://")
+            st.stop()
+
+        autoplay_interval: int = st.slider(
+            "Auto-Play Interval (s)", min_value=1, max_value=30, value=5, step=1
+        )
+
+        # Live-mode read-only summary + New Battle (shown only after Initialize)
+        if ss.battle_id:
+            st.divider()
+            _topic = ss.init_payload.get("match_config", {}).get("topic", "—")
+            _color = _vibe_color(ss.current_vibe)
+            _safe_topic = html_mod.escape(_topic)
+            _safe_vibe  = html_mod.escape(ss.current_vibe.upper().replace("_", " "))
+            _sc  = "#00FF9C" if ss.battle_active else "#FF2A4D"
+            _sl  = "ACTIVE"  if ss.battle_active else "TERMINATED"
+            _done = len(ss.turn_log)
+            st.markdown(
+                f'<div style="font-family:\'JetBrains Mono\',monospace;font-size:.74em;'
+                f'color:var(--text-mid);line-height:1.9;">'
+                f'<span style="color:var(--text-lo);">TOPIC</span><br>'
+                f'<span style="color:var(--text-hi);">{_safe_topic}</span><br><br>'
+                f'<span style="color:var(--text-lo);">VIBE&nbsp;</span>'
+                f'<span style="background:{_color};color:#000;padding:1px 6px;'
+                f'border-radius:2px;font-size:.88em;">{_safe_vibe}</span><br><br>'
+                f'<span style="color:{_sc};">{_sl}</span>&nbsp;'
+                f'<span style="color:var(--text-mid);">{_done}/{ss.turn_limit} turns</span>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+            st.divider()
+            if st.button("🆕 New Battle", use_container_width=True):
+                _reset_battle()
+
+    return base_url, autoplay_interval
+
+
+def _render_setup(base_url: str) -> None:
+    """Full-width combatants matrix — Setup Mode (DEC-2). Used before Initialize."""
+    ss = st.session_state
+
+    st.markdown(
+        '<h2 style="font-family:Orbitron,sans-serif;color:var(--cyan);letter-spacing:.1em;'
+        'font-size:1.25em;margin:0 0 .15rem 0;">⚔ AI ARENA</h2>'
+        '<p style="font-family:\'JetBrains Mono\',monospace;font-size:.72em;'
+        'color:var(--text-lo);margin:0 0 1rem 0;">CONFIGURE BATTLE · NEXUS HUD v1</p>',
+        unsafe_allow_html=True,
+    )
+
+    # ── Match Config strip ────────────────────────────────────────────────────
+    mc_topic, mc_limit, mc_vibe = st.columns([4, 1, 2])
+    with mc_topic:
+        topic = st.text_input("Topic", placeholder="Is roasting considered cyberbullying?")
+    with mc_limit:
+        turn_limit_input = st.number_input("Turns", min_value=2, max_value=50, value=10, step=1)
+    with mc_vibe:
+        current_vibe_input = st.selectbox(
+            "Starting Vibe",
+            options=["logical", "emotional", "chaotic", "opening", "heated", "cornered", "victory_lap"],
+        )
     battle_context_input = st.text_area(
-        "Battle Context (optional)",
+        "Battle Context (optional — shared world-premise both AIs must accept)",
         placeholder=(
-            "Set the shared world-premise BOTH AIs must accept as absolute truth.\n\n"
             "Example: Pyaar (love) is completely normal and obvious in this world. "
             "Every person has experienced it. Neither side can deny its existence — "
             "only argue its value or effects."
         ),
-        height=110,
+        height=68,
         help=(
-            "This context is injected into BOTH entities' system prompts and stays "
-            "fixed for the entire battle. Use it to define world rules, scenario "
-            "constraints, or any premise both combatants must accept before arguing."
+            "Injected into BOTH entity system prompts and stays fixed for the entire battle. "
+            "Use it to define world rules or constraints both combatants must accept."
         ),
     )
-    turn_limit_input = st.number_input(
-        "Turn Limit", min_value=2, max_value=50, value=10, step=1
-    )
-    current_vibe_input = st.selectbox(
-        "Starting Vibe",
-        options=["logical", "emotional", "chaotic", "opening", "heated", "cornered", "victory_lap"],
-        index=0,
-    )
 
     st.divider()
 
-    # 6d. Entity 1
-    with st.expander("Entity 1 — Persona", expanded=True):
+    # ── Combatants Matrix — side-by-side (G2 fix: all fields visible, zero scroll) ──
+    e1_col, e2_col = st.columns(2)
+
+    with e1_col:
+        st.markdown(
+            '<p style="font-family:Rajdhani,sans-serif;font-weight:700;letter-spacing:.06em;'
+            'text-transform:uppercase;color:var(--cyan);font-size:.9em;margin:0 0 .35rem 0;">'
+            '◤ ENTITY 1</p>',
+            unsafe_allow_html=True,
+        )
         e1_persona_name = st.text_input("Persona Name", key="e1_name", placeholder="Toxic Gym Bro")
         e1_selected_llm = st.selectbox(
-            "LLM",
-            options=["mock", "openai", "claude", "ollama", "groq", "huggingface"],
-            key="e1_llm",
+            "LLM", options=["mock", "openai", "claude", "ollama", "groq", "huggingface"], key="e1_llm",
         )
-        e1_persona_id = st.text_input(
-            "Persona ID (optional)", key="e1_pid", placeholder="gym_bro"
-        )
+        e1_persona_id = st.text_input("Persona ID (optional)", key="e1_pid", placeholder="gym_bro")
         e1_core_belief = st.text_area(
-            "Core Belief",
-            key="e1_belief",
-            placeholder="People who don't lift are fundamentally weak.",
-            height=80,
+            "Core Belief", key="e1_belief",
+            placeholder="People who don't lift are fundamentally weak.", height=90,
         )
         e1_trigger = st.text_area(
-            "Trigger Point",
-            key="e1_trigger",
-            placeholder="If someone calls gym a waste of time, lose your temper.",
-            height=80,
+            "Trigger Point", key="e1_trigger",
+            placeholder="If someone calls gym a waste of time, lose your temper.", height=90,
         )
-        e1_voice_id = st.text_input("Voice ID", key="e1_voice", value="premium_male_01")
-        e1_voice_speed = st.slider("Voice Speed", 0.5, 2.0, 1.1, 0.1, key="e1_speed")
+        ev1, es1 = st.columns([2, 1])
+        with ev1:
+            e1_voice_id = st.text_input("Voice ID", key="e1_voice", value="premium_male_01")
+        with es1:
+            e1_voice_speed = st.slider("Speed", 0.5, 2.0, 1.1, 0.1, key="e1_speed")
 
-    # 6e. Entity 2
-    with st.expander("Entity 2 — Persona", expanded=True):
+    with e2_col:
+        st.markdown(
+            '<p style="font-family:Rajdhani,sans-serif;font-weight:700;letter-spacing:.06em;'
+            'text-transform:uppercase;color:var(--cyan-dim);font-size:.9em;margin:0 0 .35rem 0;">'
+            'ENTITY 2 ◢</p>',
+            unsafe_allow_html=True,
+        )
         e2_persona_name = st.text_input("Persona Name", key="e2_name", placeholder="The Intellectual")
         e2_selected_llm = st.selectbox(
-            "LLM",
-            options=["mock", "openai", "claude", "ollama", "groq", "huggingface"],
-            key="e2_llm",
+            "LLM", options=["mock", "openai", "claude", "ollama", "groq", "huggingface"], key="e2_llm",
         )
-        e2_persona_id = st.text_input(
-            "Persona ID (optional)", key="e2_pid", placeholder="tech_bro"
-        )
+        e2_persona_id = st.text_input("Persona ID (optional)", key="e2_pid", placeholder="tech_bro")
         e2_core_belief = st.text_area(
-            "Core Belief",
-            key="e2_belief",
-            placeholder="Emotional intelligence is superior to physical strength.",
-            height=80,
+            "Core Belief", key="e2_belief",
+            placeholder="Emotional intelligence is superior to physical strength.", height=90,
         )
         e2_trigger = st.text_area(
-            "Trigger Point",
-            key="e2_trigger",
-            placeholder="If someone uses slang like 'bro', act highly condescending.",
-            height=80,
+            "Trigger Point", key="e2_trigger",
+            placeholder="If someone uses slang like 'bro', act highly condescending.", height=90,
         )
-        e2_voice_id = st.text_input("Voice ID", key="e2_voice", value="premium_male_02")
-        e2_voice_speed = st.slider("Voice Speed", 0.5, 2.0, 1.0, 0.1, key="e2_speed")
+        ev2, es2 = st.columns([2, 1])
+        with ev2:
+            e2_voice_id = st.text_input("Voice ID", key="e2_voice", value="premium_male_02")
+        with es2:
+            e2_voice_speed = st.slider("Speed", 0.5, 2.0, 1.0, 0.1, key="e2_speed")
 
     st.divider()
 
-    # 6f. Initialize Battle
+    # ── Initialize Battle (full-width primary — always in view, G2) ───────────
     if st.button("⚔️ Initialize Battle", use_container_width=True, type="primary"):
         _valid = True
         if not topic or len(topic.strip()) < 3:
@@ -383,257 +975,31 @@ with st.sidebar:
             with st.spinner("Initializing battle..."):
                 try:
                     _resp = api_client.initialize_battle(_payload, base_url)
-                    st.session_state.battle_id = _resp["battle_id"]
-                    st.session_state.battle_active = True
-                    st.session_state.turn_limit = int(turn_limit_input)
-                    st.session_state.current_vibe = current_vibe_input
-                    st.session_state.init_payload = _payload
-                    st.session_state.turn_log = []
-                    st.session_state.sentiment_history = []
-                    st.session_state.aggression_history = []
-                    st.session_state.autoplay_active = False
-                    st.session_state.trigger_fired = False
+                    ss.battle_id        = _resp["battle_id"]
+                    ss.battle_active    = True
+                    ss.turn_limit       = int(turn_limit_input)
+                    ss.current_vibe     = current_vibe_input
+                    ss.init_payload     = _payload
+                    ss.turn_log         = []
+                    ss.sentiment_history  = []
+                    ss.aggression_history = []
+                    ss.autoplay_active  = False
+                    ss.trigger_fired    = False
+                    ss.triggers_count   = 0
                     _log.info("Battle initialized id=%s", _resp["battle_id"])
-                    st.success(
-                        f"Battle initialized! ID: {_resp['battle_id'][:8]}..."
-                    )
+                    st.success(f"Battle initialized! ID: {_resp['battle_id'][:8]}…")
                     st.rerun()
                 except httpx.ConnectError:
                     st.error(f"Cannot reach backend at {base_url}. Is the server running?")
                 except httpx.HTTPStatusError as _e:
                     st.error(f"Init failed: {_e.response.status_code} — {_e.response.text}")
-                # Fix: added missing TimeoutException handler — previously would surface
-                # a raw Python traceback if /initialize_battle took > 30 seconds.
                 except httpx.TimeoutException:
                     st.error("Init timed out — backend is not responding.")
 
-    # Battle status badge
-    if st.session_state.battle_id:
-        _turns_done = len(st.session_state.turn_log)
-        _status_label = "ACTIVE" if st.session_state.battle_active else "TERMINATED"
-        _status_color = "green" if st.session_state.battle_active else "red"
-        st.markdown(
-            f"**Battle:** `{st.session_state.battle_id[:8]}...`  \n"
-            f"**Status:** :{_status_color}[{_status_label}]  \n"
-            f"**Turns:** {_turns_done} / {st.session_state.turn_limit}"
-        )
 
-# ─── SECTION 7: Main Stage — Module 2 (Visual Telemetry) ─────────────────────
-st.subheader("Visual Telemetry & Battle Analytics")
-col_chart, col_vibe, col_pulse = st.columns([3, 1, 1])
-
-with col_chart:
-    _chart = _build_telemetry_chart(
-        st.session_state.sentiment_history,
-        st.session_state.aggression_history,
-    )
-    if _chart:
-        st.altair_chart(_chart, use_container_width=True)
-    else:
-        st.info("Telemetry will appear here after the first turn.")
-
-with col_vibe:
-    _color = _vibe_color(st.session_state.current_vibe)
-    # Fix: html.escape() on session state value injected into HTML — prevents XSS
-    # if backend ever returns a crafted string in current_vibe.
-    _safe_vibe = html_mod.escape(
-        st.session_state.current_vibe.upper().replace("_", " ")
-    )
-    st.markdown(
-        f"""
-        <div style="
-            background-color: {_color};
-            border-radius: 12px;
-            padding: 18px 12px;
-            text-align: center;
-            color: white;
-            font-weight: bold;
-            font-size: 1.05em;
-            box-shadow: 0 0 14px {_color};
-            min-height: 90px;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            line-height: 1.5;
-        ">
-            🧠 VIBE<br>{_safe_vibe}
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-with col_pulse:
-    if st.session_state.trigger_fired:
-        st.markdown(
-            """
-            <div style="
-                background-color: #FF6B00;
-                border-radius: 12px;
-                padding: 18px 12px;
-                text-align: center;
-                color: white;
-                font-weight: bold;
-                font-size: 1.05em;
-                box-shadow: 0 0 18px #FF6B00;
-                min-height: 90px;
-                display: flex;
-                flex-direction: column;
-                justify-content: center;
-                line-height: 1.5;
-            ">
-                ⚡ TRIGGER<br>ACTIVATED
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-    else:
-        st.markdown(
-            """
-            <div style="
-                background-color: #2a2a2a;
-                border-radius: 12px;
-                padding: 18px 12px;
-                text-align: center;
-                color: #555555;
-                font-size: 1.05em;
-                border: 1px solid #444;
-                min-height: 90px;
-                display: flex;
-                flex-direction: column;
-                justify-content: center;
-                line-height: 1.5;
-            ">
-                ⚡ TRIGGER<br>MONITOR
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-st.divider()
-
-# Fix: status_placeholder placed here — above Arena Log, below Telemetry — per spec.
-# Previously it was below the Arena Log in Section 9, which was a layout position bug.
-status_placeholder = st.empty()
-
-# ─── SECTION 8: Main Stage — Module 3 (Arena Log) ────────────────────────────
-st.subheader("Arena Log")
-
-# Fix: _ instead of _log_header — the first column is intentionally empty.
-_, _toggle_col = st.columns([4, 1])
-with _toggle_col:
-    st.session_state.show_monologue = st.toggle(
-        "🧠 Internal Monologue",
-        value=st.session_state.show_monologue,
-    )
-
-_ss = st.session_state
-_e1_name = _ss.init_payload.get("entity_1", {}).get("persona_name", "Entity 1")
-_e2_name = _ss.init_payload.get("entity_2", {}).get("persona_name", "Entity 2")
-
-# st.container(height=) requires Streamlit >=1.32; falls back to plain container
-try:
-    _log_container = st.container(height=400)
-except TypeError:
-    _log_container = st.container()
-
-with _log_container:
-    if not _ss.turn_log:
-        st.caption(
-            "The arena is silent... Initialize a battle and hit Next Turn to begin."
-        )
-    for _entry in _ss.turn_log:
-        _speaker = _entry.get("speaker", "entity_1")
-        _is_e1 = _speaker == "entity_1"
-        _display_name = _e1_name if _is_e1 else _e2_name
-        _chat_role = "user" if _is_e1 else "assistant"
-
-        if _ss.show_monologue:
-            _monologue = _entry.get("internal_monologue", "")
-            if _monologue:
-                with st.chat_message("assistant"):
-                    st.markdown(f"*[Thinking — {_display_name}]: {_monologue}*")
-
-        with st.chat_message(_chat_role):
-            st.markdown(
-                f"**{_display_name}:** "
-                f"{_entry.get('spoken_dialogue', '[No dialogue returned]')}"
-            )
-
-st.divider()
-
-# ─── SECTION 9: Main Stage — Module 4 (God Mode Controls) ────────────────────
-st.subheader("God Mode Controls")
-
-_battle_ready = (
-    _ss.battle_id is not None
-    and _ss.battle_active
-    and len(_ss.turn_log) < _ss.turn_limit
-)
-
-# 9b. Four-column button row
-_c1, _c2, _c3, _c4 = st.columns(4)
-
-with _c1:
-    if st.button("▶ Next Turn", disabled=not _battle_ready, use_container_width=True):
-        _run_turn("next_turn", base_url, status_placeholder)
-        st.rerun()
-
-with _c2:
-    _autoplay_label = "⏸ Stop Auto-Play" if _ss.autoplay_active else "⏯ Auto-Play"
-    _autoplay_disabled = not _battle_ready and not _ss.autoplay_active
-    if st.button(_autoplay_label, disabled=_autoplay_disabled, use_container_width=True):
-        if _ss.autoplay_active:
-            _ss.autoplay_active = False
-        else:
-            _ss.autoplay_active = True
-            _ss.autoplay_last_fired = time.time()
-        st.rerun()
-
-with _c3:
-    _bomb_text = st.text_input(
-        "💣 Context text (required)",
-        key="bomb_text_input",
-        placeholder="Inject a new narrative twist...",
-        help="Type something here first, then hit Context Bomb to inject it into the battle.",
-    )
-    if st.button(
-        "💣 Context Bomb",
-        disabled=not _battle_ready or not _bomb_text,
-        use_container_width=True,
-    ):
-        _run_turn("context_bomb", base_url, status_placeholder, context_text=_bomb_text)
-        st.rerun()
-
-with _c4:
-    _kill_disabled = _ss.battle_id is None or not _ss.battle_active
-    if st.button("🔴 KILL SWITCH", disabled=_kill_disabled, use_container_width=True):
-        _run_turn("kill_switch", base_url, status_placeholder)
-        st.error("🔴 BATTLE TERMINATED")
-        st.rerun()
-
-# Status banners below controls
-if _ss.battle_id and not _ss.battle_active:
-    st.error("🔴 Battle terminated. Initialize a new battle to continue.")
-elif _ss.battle_id and len(_ss.turn_log) >= _ss.turn_limit:
-    st.info("✅ Battle complete — turn limit reached. Initialize a new battle.")
-
-# 9c. Auto-Play rerun loop (epoch-check pattern)
-if _ss.autoplay_active:
-    if not _ss.battle_active:
-        _ss.autoplay_active = False
-        st.rerun()
-    elif len(_ss.turn_log) >= _ss.turn_limit:
-        _ss.autoplay_active = False
-        st.rerun()
-    else:
-        _elapsed = time.time() - _ss.autoplay_last_fired
-        if _elapsed >= autoplay_interval:
-            _run_turn("next_turn", base_url, status_placeholder)
-            _ss.autoplay_last_fired = time.time()
-            st.rerun()
-        else:
-            # Fix: sleep exactly the remaining time (one sleep per interval)
-            # instead of the previous 0.5s polling loop that blocked the thread
-            # on every rerun cycle for the full duration of the interval.
-            time.sleep(max(0.0, autoplay_interval - _elapsed))
-            st.rerun()
+# ─── SECTION 7: Router — Setup Mode ↔ Live Mode ──────────────────────────────
+base_url, autoplay_interval = _render_sidebar()
+if st.session_state.battle_id:
+    render_live(base_url, autoplay_interval)
+else:
+    _render_setup(base_url)
